@@ -1,6 +1,6 @@
 # Encrypted IRC Client
 
-A Windows desktop IRC client featuring per-room and per-PRIVMSG client-side encryption.
+A Windows desktop IRC client featuring per-room and per-PRIVMSG client-side encryption/decryption.
 
 ![Encrypted IRC Client Screenshot](screenshot.png)
 
