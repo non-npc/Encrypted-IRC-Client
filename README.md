@@ -1,6 +1,6 @@
 # Encrypted IRC Client
 
-A Windows desktop IRC client built with Python 3.12+ and PyQt6 v6.8+, featuring per-room client-side encryption.
+A Windows desktop IRC client featuring per-room and per-PRIVMSG client-side encryption.
 
 ![Encrypted IRC Client Screenshot](screenshot.png)
 
