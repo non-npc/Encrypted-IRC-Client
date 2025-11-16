@@ -118,6 +118,10 @@ Messages are automatically logged to the `logs/` directory, organized by server 
 - Key sharing must be done out-of-band (the application does not provide key exchange)
 - If you lose your passphrase, encrypted messages cannot be recovered
 
+## Features Not Included (Yet)
+
+- see Excluded_Features_List.MD
+
 ## License
 
 This project is provided as-is for educational and personal use.
