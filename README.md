@@ -69,12 +69,8 @@ python main.py
 - If you forget the key, you cannot decrypt previous messages
 - Messages are encrypted before sending to the IRC server
 - Users without the key will see encrypted gibberish
-
-### How Encryption Works
-
 - Messages are encrypted using **AES-256-GCM** with a key derived from your passphrase
 - Each channel has its own encryption key (or no encryption)
-- If decryption fails (wrong key), you'll see `[Decryption failed]` in the message
 
 ### Commands
 
