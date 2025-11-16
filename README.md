@@ -72,7 +72,6 @@ python main.py
 
 ### How Encryption Works
 
-- **Encrypted messages** are wrapped in a special envelope: `+++ENCV1:<base64-data>`
 - Messages are encrypted using **AES-256-GCM** with a key derived from your passphrase
 - Each channel has its own encryption key (or no encryption)
 - If decryption fails (wrong key), you'll see `[Decryption failed]` in the message
