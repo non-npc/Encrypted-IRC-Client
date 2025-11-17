@@ -120,8 +120,11 @@ class ChannelWidget(QWidget):
         self.nicklist.setStyleSheet("border-left: 1px solid #ccc;")
         self.nicklist.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.nicklist.customContextMenuRequested.connect(self._on_nicklist_context_menu)
-        if self.channel_name == "STATUS" or self.is_pm:
+        # Show nicklist for channels (channels start with # or &), hide for STATUS and PMs
+        if self.channel_name == "STATUS" or (not self.channel_name.startswith('#') and not self.channel_name.startswith('&')):
             self.nicklist.hide()
+        else:
+            self.nicklist.show()
         content_layout.addWidget(self.nicklist, 1)
         
         layout.addLayout(content_layout, 2)
@@ -552,6 +555,12 @@ class ChannelWidget(QWidget):
         """Add a nickname to the list, handling prefixes to avoid duplicates."""
         if not nick:
             return
+        
+        # Ensure nicklist is visible for channels (not STATUS and not PMs)
+        # Check channel name directly (channels start with #) rather than is_pm flag
+        # to handle cases where widget might have been created with wrong is_pm flag
+        if self.channel_name != "STATUS" and (self.channel_name.startswith('#') or self.channel_name.startswith('&')):
+            self.nicklist.show()
         
         # Get the base nickname (without prefix)
         base_nick = nick.lstrip('@+%&~')

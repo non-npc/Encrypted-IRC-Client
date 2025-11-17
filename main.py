@@ -15,6 +15,9 @@ from core.encryption_manager import EncryptionManager
 from core.alias_manager import AliasManager
 from ui.main_window import MainWindow
 
+# Application version
+VERSION = "0.2"
+
 
 def setup_logging():
     """Setup application logging."""
@@ -123,7 +126,7 @@ def main():
     add_sample_servers(settings_manager)
     
     # Create and show main window
-    window = MainWindow(settings_manager, encryption_manager, alias_manager)
+    window = MainWindow(settings_manager, encryption_manager, alias_manager, version=VERSION)
     window.show()
     
     # Run application

@@ -33,12 +33,13 @@ logger = logging.getLogger(__name__)
 class MainWindow(QMainWindow):
     """Main application window."""
     
-    def __init__(self, settings_manager, encryption_manager, alias_manager):
+    def __init__(self, settings_manager, encryption_manager, alias_manager, version="0.2"):
         """Initialize main window."""
         super().__init__()
         self.settings_manager = settings_manager
         self.encryption_manager = encryption_manager
         self.alias_manager = alias_manager
+        self.version = version
         
         # Data structures
         self.irc_clients: Dict[str, IRCClient] = {}  # server_name -> IRCClient
@@ -234,11 +235,17 @@ class MainWindow(QMainWindow):
     def _auto_connect_servers(self):
         """Auto-connect to the first server marked for auto-connect (only one allowed)."""
         servers = self.settings_manager.get_servers()
+        auto_connect_found = False
         for server in servers:
             if server.get('auto_connect'):
                 # Only connect to the first server with auto_connect enabled
                 QTimer.singleShot(1000, lambda s=server: self._connect_to_server(s))
+                auto_connect_found = True
                 break
+        
+        # If no servers are auto-connected, show welcome tab
+        if not auto_connect_found:
+            QTimer.singleShot(100, self._show_default_tab)
     
     def _show_server_list(self):
         """Show server list dialog."""
@@ -302,6 +309,18 @@ class MainWindow(QMainWindow):
             server_item = self.server_items[server_name]
             server_item.setText(0, f"🔌 {server_name}")
         
+        # Close welcome tab if it exists (no longer needed when connecting to a server)
+        welcome_key = "Welcome:STATUS"
+        if welcome_key in self.channel_widgets:
+            welcome_widget = self.channel_widgets[welcome_key]
+            for i in range(self.tabs.count()):
+                if self.tabs.widget(i) == welcome_widget:
+                    self.tabs.removeTab(i)
+                    break
+            # Remove welcome widget from memory
+            widget = self.channel_widgets.pop(welcome_key)
+            widget.deleteLater()
+        
         # Create status window (always first tab)
         status_key = f"{server_name}:STATUS"
         status_widget = self._get_or_create_channel_widget(
@@ -352,6 +371,11 @@ class MainWindow(QMainWindow):
                 child = server_item.child(0)
                 server_item.removeChild(child)
         
+        # Remove server from irc_clients if still present
+        # (it may have been removed already if disconnect was initiated by user)
+        if server_name in self.irc_clients:
+            del self.irc_clients[server_name]
+        
         # Clean up MOTD timers and queues
         if server_name in self.motd_timers:
             self.motd_timers[server_name].stop()
@@ -366,22 +390,22 @@ class MainWindow(QMainWindow):
         if server_name in self.last_motd_lines:
             del self.last_motd_lines[server_name]
         
-        # Close all tabs for this server (except status tab)
+        # Close all tabs for this server (including status tab)
         tabs_to_remove = []
         for i in range(self.tabs.count()):
             widget = self.tabs.widget(i)
             if isinstance(widget, ChannelWidget):
-                if widget.server_name == server_name and widget.channel_name != "STATUS":
+                if widget.server_name == server_name:
                     tabs_to_remove.append(i)
         
         # Remove tabs in reverse order to maintain indices
         for i in reversed(tabs_to_remove):
             self.tabs.removeTab(i)
         
-        # Remove channel widgets from memory (except status)
+        # Remove channel widgets from memory (including status)
         keys_to_remove = []
         for key, widget in self.channel_widgets.items():
-            if widget.server_name == server_name and widget.channel_name != "STATUS":
+            if widget.server_name == server_name:
                 keys_to_remove.append(key)
         
         for key in keys_to_remove:
@@ -389,32 +413,41 @@ class MainWindow(QMainWindow):
             # Disconnect signals and clean up
             widget.deleteLater()
         
-        # Add status message to status tab
-        try:
-            status_widget = self._get_or_create_channel_widget(server_name, "STATUS", is_pm=False)
-            # Get hostname from server config (try irc_client first, then database, then fallback)
-            hostname = server_name  # Default to server name
-            irc_client = self.irc_clients.get(server_name)
-            if irc_client and hasattr(irc_client, 'server_config'):
-                hostname = irc_client.server_config.get('hostname', server_name)
-            elif self.settings_manager and self.settings_manager.conn:
-                # Try database if connection is available
-                try:
-                    servers = self.settings_manager.get_servers()
-                    for server in servers:
-                        if server.get('name') == server_name:
-                            hostname = server.get('hostname', server_name)
-                            break
-                except Exception as e:
-                    logger.warning(f"Could not get hostname from database: {e}")
-            
-            status_widget.add_status_message(
-                f"Disconnected from {hostname}",
-                QColor(255, 128, 0)  # Orange for disconnection
+        # Check if there are no servers connected and no tabs, then show default tab
+        if len(self.irc_clients) == 0 and self.tabs.count() == 0:
+            # Show a default welcome/status tab when no servers are connected
+            self._show_default_tab()
+    
+    def _show_default_tab(self):
+        """Show a default welcome tab when no servers are connected."""
+        # Only show if there are no tabs and no servers connected
+        if self.tabs.count() > 0 or len(self.irc_clients) > 0:
+            return
+        
+        # Create a welcome widget (using a special server name)
+        welcome_server_name = "Welcome"
+        welcome_key = f"{welcome_server_name}:STATUS"
+        
+        # Check if welcome widget already exists
+        if welcome_key in self.channel_widgets:
+            widget = self.channel_widgets[welcome_key]
+        else:
+            # Create new welcome widget
+            widget = ChannelWidget(
+                welcome_server_name, "STATUS", is_pm=False,
+                encryption_manager=self.encryption_manager,
+                settings_manager=self.settings_manager
             )
-        except Exception as e:
-            # Database might be closed during shutdown - just log and continue
-            logger.debug(f"Could not add disconnect message (app may be shutting down): {e}")
+            # Disable message sending for welcome tab (no server connected)
+            widget.setEnabled(False)
+            widget.add_status_message(
+                "No servers connected. Use Ctrl+N to add a server, or double-click a server in the list to connect.",
+                QColor(0, 128, 255)  # Light blue for info
+            )
+            self.channel_widgets[welcome_key] = widget
+        
+        # Add or show the tab
+        self._add_or_show_tab(widget, "Welcome")
     
     def _on_irc_message(self, server_name: str, message: IRCMessage):
         """Handle incoming IRC message."""
@@ -1298,9 +1331,10 @@ class MainWindow(QMainWindow):
         """Show about dialog."""
         QMessageBox.about(
             self, "About",
-            "Encrypted IRC Client\n\n"
-            "A basic IRC client with per-room client-side encryption.\n\n"
-            "Built with Python 3.12+ and PyQt6 v6.8+"
+            f"Encrypted IRC Client\n"
+            f"Version {self.version}\n\n"
+            f"A basic IRC client with per-room client-side encryption.\n\n"
+            f"Built with Python 3.12+ and PyQt6 v6.8+"
         )
     
     def closeEvent(self, event):
