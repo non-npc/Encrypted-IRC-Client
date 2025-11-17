@@ -661,6 +661,16 @@ class MainWindow(QMainWindow):
                 if target and (target.startswith('#') or target.startswith('&')):
                     # It's a channel-specific numeric reply, route to that channel
                     pass  # Keep target as is
+                elif message.command in ['332', '333']:  # RPL_TOPIC and RPL_TOPICWHOTIME
+                    # Topic messages: channel is in params[1] (after nick in params[0])
+                    if len(message.params) >= 2:
+                        channel = message.params[1]
+                        if channel and (channel.startswith('#') or channel.startswith('&')):
+                            target = channel
+                        else:
+                            target = "STATUS"
+                    else:
+                        target = "STATUS"
                 else:
                     # Server message (MOTD, welcome, etc.), route to STATUS
                     target = "STATUS"
@@ -689,13 +699,12 @@ class MainWindow(QMainWindow):
         
         # If this is a JOIN message for our own nick, switch to the channel
         if message.command == 'JOIN' and message.nick == own_nick and target != "STATUS":
-            # Add status message to status tab
-            status_widget = self._get_or_create_channel_widget(server_name, "STATUS", is_pm=False)
+            # Add status message to the channel tab (not status tab)
             channel_name = message.params[0] if message.params else target
             if channel_name:
                 # Remove any leading colon if present
                 channel_name = channel_name.lstrip(':')
-                status_widget.add_status_message(
+                widget.add_status_message(
                     f"Joined channel: {channel_name}",
                     QColor(0, 200, 0)  # Green for success
                 )
@@ -1107,9 +1116,13 @@ class MainWindow(QMainWindow):
         item_type = data[0]
         if item_type == 'server':
             server_name = data[1]
-            # Show status window
-            widget = self._get_or_create_channel_widget(server_name, "STATUS")
-            self._add_or_show_tab(widget, f"{server_name} - Status")
+            # Check if server is connected
+            if server_name in self.irc_clients:
+                # Server is connected, disconnect it
+                self._disconnect_server(server_name)
+            else:
+                # Server is not connected, connect it
+                self._connect_to_server_by_name(server_name)
         elif item_type == 'channel':
             server_name = data[1]
             channel_name = data[2]
