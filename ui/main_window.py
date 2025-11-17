@@ -50,6 +50,8 @@ class MainWindow(QMainWindow):
         self.motd_complete_timers: Dict[str, QTimer] = {}  # server_name -> QTimer for MOTD completion message
         self.motd_complete_pending: Dict[str, bool] = {}  # server_name -> whether MOTD completion is pending
         self.last_motd_lines: Dict[str, str] = {}  # server_name -> last displayed MOTD line for combining
+        self.channel_list_cache: Dict[str, dict] = {}  # server_name -> {'channels': list, 'timestamp': float}
+        self.channel_list_requested: Dict[str, bool] = {}  # server_name -> whether LIST command was requested
         
         self._init_ui()
         self._init_tray()
@@ -490,7 +492,12 @@ class MainWindow(QMainWindow):
                 channel = message.params[1] if len(message.params) > 1 else None
                 if channel:
                     widget = self._get_or_create_channel_widget(server_name, channel, is_pm=False)
-                    # Don't display this message
+                    # Force final update of nicklist now that all names have been received
+                    if hasattr(widget, 'nicklist_update_timer'):
+                        # Cancel any pending update and do immediate final update
+                        widget.nicklist_update_timer.stop()
+                        widget.nicklist_update_pending = False
+                        widget._update_nicklist()
             return
         
         if message.command == '376':  # RPL_ENDOFMOTD - End of /MOTD command
@@ -569,14 +576,18 @@ class MainWindow(QMainWindow):
                 nicks_str = message.params[3] if len(message.params) > 3 else ""
                 if nicks_str:
                     widget = self._get_or_create_channel_widget(server_name, channel, is_pm=False)
-                    # Parse and add nicks to the widget
+                    # Parse and add nicks to the widget in batch
+                    # This prevents UI freezing for large channels
                     nicks = nicks_str.split()
+                    # Add all nicks at once (add_nick will handle batching internally)
                     for nick in nicks:
                         widget.add_nick(nick)
+                    # Force a final update after a short delay to ensure UI is updated
+                    # The batched update timer will handle this
             # Don't display this message in status
             return
         
-        # Handle special numeric replies (but still display them in status)
+        # Handle special numeric replies
         if message.command == '322':  # RPL_LIST - channel list entry
             # Format: :server 322 nick #channel user_count :topic
             if len(message.params) >= 3:
@@ -586,13 +597,32 @@ class MainWindow(QMainWindow):
                 # Forward to channel list dialog if open
                 if hasattr(self, '_channel_list_dialog') and self._channel_list_dialog:
                     self._channel_list_dialog.add_channel(channel, user_count, topic)
-            # Still display in status window
-            target = "STATUS"
+                # Store in cache (will be finalized when LISTEND is received)
+                if server_name not in self.channel_list_cache:
+                    self.channel_list_cache[server_name] = {'channels': [], 'timestamp': None}
+                self.channel_list_cache[server_name]['channels'].append((channel, user_count, topic))
+            # Don't display channel list entries in status window (too many messages)
+            return
         elif message.command == '323':  # RPL_LISTEND - end of channel list
+            # Finalize cache with timestamp and save to disk
+            import time
+            if server_name in self.channel_list_cache:
+                cache_entry = self.channel_list_cache[server_name]
+                channels = cache_entry['channels']
+                cache_entry['timestamp'] = time.time()
+                channel_count = len(channels)
+                # Save cache to disk (persistent storage)
+                self.settings_manager.save_channel_list_cache(server_name, channels)
+                # Show summary message in status window
+                status_widget = self._get_or_create_channel_widget(server_name, "STATUS", is_pm=False)
+                status_widget.add_status_message(
+                    f"Channel list received: {channel_count} channels found",
+                    QColor(0, 128, 0)
+                )
             if hasattr(self, '_channel_list_dialog') and self._channel_list_dialog:
                 self._channel_list_dialog.set_list_complete()
-            # Still display in status window
-            target = "STATUS"
+            # Don't display the raw LISTEND message in status window (we show summary instead)
+            return
         elif message.command == 'PART':
             # PART messages: channel is in params[0]
             if message.params and len(message.params) > 0:
@@ -1044,6 +1074,21 @@ class MainWindow(QMainWindow):
                 self.tree.takeTopLevelItem(self.tree.indexOfTopLevelItem(server_item))
                 del self.server_items[server_name]
         
+        elif command == 'LIST':
+            # Track LIST command request and show summary message
+            self.channel_list_requested[server_name] = True
+            # Clear cache for new request
+            if server_name in self.channel_list_cache:
+                self.channel_list_cache[server_name] = {'channels': [], 'timestamp': None}
+            # Show summary message in status window
+            status_widget = self._get_or_create_channel_widget(server_name, "STATUS", is_pm=False)
+            status_widget.add_status_message(
+                "Requesting channel list from server...",
+                QColor(0, 0, 255)
+            )
+            # Send LIST command
+            irc_client.send_command("LIST")
+        
         else:
             # Generic command - send as-is
             if expanded.startswith('/'):
@@ -1232,7 +1277,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_channel_list_dialog') and self._channel_list_dialog:
             self._channel_list_dialog.close()
         
-        self._channel_list_dialog = ChannelListDialog(server_name, irc_client, self)
+        self._channel_list_dialog = ChannelListDialog(server_name, irc_client, main_window=self, parent=self)
         self._channel_list_dialog.exec()
         self._channel_list_dialog = None
     

@@ -6,6 +6,8 @@ Handles SQLite database operations for servers, settings, room keys, and aliases
 import sqlite3
 import os
 import logging
+import json
+import time
 from typing import Optional, Dict, List, Any
 from pathlib import Path
 
@@ -74,6 +76,16 @@ class SettingsManager:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 alias_name TEXT NOT NULL UNIQUE,
                 expansion TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Channel list cache table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS channel_list_cache (
+                server_name TEXT PRIMARY KEY,
+                channels_json TEXT NOT NULL,
+                timestamp REAL NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -239,6 +251,64 @@ class SettingsManager:
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM aliases WHERE alias_name = ?", (alias_name,))
         self.conn.commit()
+    
+    def save_channel_list_cache(self, server_name: str, channels: List[tuple]):
+        """
+        Save channel list cache for a server.
+        
+        Args:
+            server_name: Name of the server
+            channels: List of (channel_name, user_count, topic) tuples
+        """
+        try:
+            cursor = self.conn.cursor()
+            channels_json = json.dumps(channels)
+            timestamp = time.time()
+            cursor.execute("""
+                INSERT OR REPLACE INTO channel_list_cache
+                (server_name, channels_json, timestamp)
+                VALUES (?, ?, ?)
+            """, (server_name, channels_json, timestamp))
+            self.conn.commit()
+            logger.debug(f"Saved channel list cache for {server_name}: {len(channels)} channels")
+        except Exception as e:
+            logger.error(f"Failed to save channel list cache: {e}")
+    
+    def get_channel_list_cache(self, server_name: str, max_age_seconds: int = 3600) -> Optional[Dict[str, Any]]:
+        """
+        Get channel list cache for a server if it exists and hasn't expired.
+        
+        Args:
+            server_name: Name of the server
+            max_age_seconds: Maximum age of cache in seconds (default: 1 hour)
+        
+        Returns:
+            Dict with 'channels' (list of tuples) and 'timestamp' (float), or None if not found/expired
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT channels_json, timestamp
+                FROM channel_list_cache
+                WHERE server_name = ?
+            """, (server_name,))
+            row = cursor.fetchone()
+            if row:
+                channels_json, timestamp = row
+                cache_age = time.time() - timestamp
+                if cache_age < max_age_seconds:
+                    channels = json.loads(channels_json)
+                    logger.debug(f"Loaded channel list cache for {server_name}: {len(channels)} channels ({int(cache_age)}s old)")
+                    return {'channels': channels, 'timestamp': timestamp}
+                else:
+                    logger.debug(f"Channel list cache for {server_name} expired ({int(cache_age)}s old, max {max_age_seconds}s)")
+                    # Delete expired cache
+                    cursor.execute("DELETE FROM channel_list_cache WHERE server_name = ?", (server_name,))
+                    self.conn.commit()
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get channel list cache: {e}")
+            return None
     
     def close(self):
         """Close the database connection."""

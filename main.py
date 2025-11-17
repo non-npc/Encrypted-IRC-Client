@@ -8,7 +8,7 @@ from pathlib import Path
 from logging.handlers import RotatingFileHandler
 
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, qInstallMessageHandler, QtMsgType
 
 from core.settings_manager import SettingsManager
 from core.encryption_manager import EncryptionManager
@@ -17,6 +17,29 @@ from ui.main_window import MainWindow
 
 # Application version
 VERSION = "0.2"
+
+
+def qt_message_handler(msg_type, context, message):
+    """Handle Qt log messages and filter out font warnings."""
+    # Filter out OpenType font support warnings (harmless)
+    if "OpenType support missing" in message:
+        return
+    
+    # Use default Qt message handler for other messages
+    if msg_type >= QtMsgType.QtWarningMsg:
+        # Only show warnings and above (not debug/info)
+        # Format message manually since qFormatLogMessage is not available in PyQt6
+        msg_type_str = {
+            QtMsgType.QtDebugMsg: "Debug",
+            QtMsgType.QtWarningMsg: "Warning",
+            QtMsgType.QtCriticalMsg: "Critical",
+            QtMsgType.QtFatalMsg: "Fatal",
+            QtMsgType.QtInfoMsg: "Info"
+        }.get(msg_type, "Unknown")
+        formatted = f"Qt {msg_type_str}: {message}"
+        if context.file:
+            formatted = f"{context.file}:{context.line} - {formatted}"
+        print(formatted)
 
 
 def setup_logging():
@@ -116,6 +139,9 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Encrypted IRC Client")
     app.setOrganizationName("IRC Client")
+    
+    # Install Qt message handler to filter font warnings (must be after QApplication creation)
+    qInstallMessageHandler(qt_message_handler)
     
     # Initialize core components
     settings_manager = SettingsManager()

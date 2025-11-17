@@ -3,11 +3,13 @@ Channel list dialog showing available channels on the server.
 """
 
 import logging
+import time
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QDialogButtonBox, QLabel, QHeaderView, QLineEdit
 )
 from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QColor
 
 logger = logging.getLogger(__name__)
 
@@ -15,11 +17,12 @@ logger = logging.getLogger(__name__)
 class ChannelListDialog(QDialog):
     """Dialog for displaying and joining channels from the server."""
     
-    def __init__(self, server_name: str, irc_client, parent=None):
+    def __init__(self, server_name: str, irc_client, main_window=None, parent=None):
         """Initialize channel list dialog."""
         super().__init__(parent)
         self.server_name = server_name
         self.irc_client = irc_client
+        self.main_window = main_window  # Reference to main window for cache access
         self.channels = []  # List of (name, user_count, topic) tuples
         self.pending_update = False  # Flag to track if update is pending
         self.update_timer = QTimer(self)
@@ -66,7 +69,7 @@ class ChannelListDialog(QDialog):
         button_layout = QHBoxLayout()
         
         self.refresh_button = QPushButton("Refresh")
-        self.refresh_button.clicked.connect(self._refresh_list)
+        self.refresh_button.clicked.connect(lambda: self._refresh_list(force_refresh=True))
         button_layout.addWidget(self.refresh_button)
         
         self.join_button = QPushButton("Join")
@@ -87,15 +90,48 @@ class ChannelListDialog(QDialog):
         # Request channel list
         self._refresh_list()
     
-    def _refresh_list(self):
-        """Request channel list from server."""
+    def _refresh_list(self, force_refresh=False):
+        """Request channel list from server or use cache if available."""
         self.channels = []
         self.table.setRowCount(0)
-        self.info_label.setText("Requesting channel list from server...")
         self.refresh_button.setEnabled(False)
         
-        if self.irc_client:
-            self.irc_client.send_command("LIST")
+        # Check persistent cache from disk if available and not forcing refresh
+        cache_valid = False
+        if not force_refresh and self.main_window:
+            # Get cache expiration from settings (default: 1 hour = 3600 seconds)
+            cache_max_age = int(self.main_window.settings_manager.get_setting('channel_list_expiration', '3600'))
+            # Try to load from persistent cache (disk)
+            cache_entry = self.main_window.settings_manager.get_channel_list_cache(self.server_name, cache_max_age)
+            if cache_entry:
+                # Cache is valid, use it
+                self.channels = cache_entry['channels'].copy()
+                # Also update in-memory cache
+                self.main_window.channel_list_cache[self.server_name] = cache_entry
+                cache_age = time.time() - cache_entry['timestamp']
+                self.info_label.setText(f"Using cached channel list ({len(self.channels)} channels, {int(cache_age)}s old)")
+                self._update_table()
+                self.info_label.setText(f"Found {len(self.channels)} channels (cached)")
+                self.refresh_button.setEnabled(True)
+                cache_valid = True
+        
+        if not cache_valid:
+            # Request from server
+            self.info_label.setText("Requesting channel list from server...")
+            # Show summary message in status window if main_window is available
+            if self.main_window:
+                self.main_window.channel_list_requested[self.server_name] = True
+                # Clear cache for new request
+                if self.server_name in self.main_window.channel_list_cache:
+                    self.main_window.channel_list_cache[self.server_name] = {'channels': [], 'timestamp': None}
+                status_widget = self.main_window._get_or_create_channel_widget(self.server_name, "STATUS", is_pm=False)
+                status_widget.add_status_message(
+                    "Requesting channel list from server...",
+                    QColor(0, 0, 255)
+                )
+            
+            if self.irc_client:
+                self.irc_client.send_command("LIST")
     
     def add_channel(self, channel_name: str, user_count: str, topic: str):
         """Add a channel to the list."""
@@ -195,7 +231,16 @@ class ChannelListDialog(QDialog):
         
         channel_name = self.table.item(row, 0).text()
         if channel_name:
-            if self.irc_client:
+            if self.irc_client and self.main_window:
+                # Create the channel widget immediately (before server response)
+                # This ensures the tab is ready when the JOIN response arrives
+                widget = self.main_window._get_or_create_channel_widget(
+                    self.server_name, channel_name, is_pm=False
+                )
+                # Show the tab immediately
+                title = self.main_window._get_tab_title(widget)
+                self.main_window._add_or_show_tab(widget, title)
+                # Send the join command
                 self.irc_client.join_channel(channel_name)
             self.accept()
 

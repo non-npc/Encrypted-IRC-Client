@@ -122,6 +122,11 @@ class PreferencesDialog(QDialog):
         self.reconnect_delay_spin.setSuffix(" seconds")
         layout.addRow("Reconnect Delay:", self.reconnect_delay_spin)
         
+        # Channel list expiration
+        self.channel_list_expiration_combo = QComboBox()
+        self.channel_list_expiration_combo.addItems(["10 minutes", "30 minutes", "1 hour"])
+        layout.addRow("Channel List Cache Expiration:", self.channel_list_expiration_combo)
+        
         widget.setLayout(layout)
         return widget
     
@@ -166,6 +171,16 @@ class PreferencesDialog(QDialog):
         self.reconnect_delay_spin.setValue(
             int(self.settings_manager.get_setting('reconnect_delay', '5'))
         )
+        
+        # Channel list expiration (default: 1 hour = 3600 seconds)
+        channel_list_expiration = int(self.settings_manager.get_setting('channel_list_expiration', '3600'))
+        # Map seconds to combo box index: 600 (10 min) = 0, 1800 (30 min) = 1, 3600 (1 hour) = 2
+        if channel_list_expiration == 600:
+            self.channel_list_expiration_combo.setCurrentIndex(0)
+        elif channel_list_expiration == 1800:
+            self.channel_list_expiration_combo.setCurrentIndex(1)
+        else:  # Default to 1 hour (3600)
+            self.channel_list_expiration_combo.setCurrentIndex(2)
     
     def _save_and_accept(self):
         """Save settings and accept dialog."""
@@ -186,6 +201,11 @@ class PreferencesDialog(QDialog):
             'auto_reconnect', '1' if self.auto_reconnect_check.isChecked() else '0'
         )
         self.settings_manager.set_setting('reconnect_delay', str(self.reconnect_delay_spin.value()))
+        
+        # Channel list expiration: map combo box selection to seconds
+        expiration_index = self.channel_list_expiration_combo.currentIndex()
+        expiration_seconds = [600, 1800, 3600][expiration_index]  # 10 min, 30 min, 1 hour
+        self.settings_manager.set_setting('channel_list_expiration', str(expiration_seconds))
         
         self.accept()
 

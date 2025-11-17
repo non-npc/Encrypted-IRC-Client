@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLineEdit,
     QListWidget, QLabel, QPushButton, QMenu
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QUrl
+from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QTimer
 from PyQt6.QtGui import QTextCharFormat, QColor, QFont
 
 from core.irc_parser import IRCMessage
@@ -84,6 +84,13 @@ class ChannelWidget(QWidget):
         self.nicks: Set[str] = set()
         self.unread_count = 0
         self.scrolled_up = False
+        
+        # Batched nicklist updates to prevent UI freezing
+        self.nicklist_update_timer = QTimer(self)
+        self.nicklist_update_timer.setSingleShot(True)
+        self.nicklist_update_timer.timeout.connect(self._update_nicklist)
+        self.nicklist_update_pending = False
+        self.nicklist_update_interval = 200  # Update every 200ms
         
         self._init_ui()
         self._load_settings()
@@ -383,7 +390,7 @@ class ChannelWidget(QWidget):
                                         # Add without prefix if it's not already there
                                         if base_nick not in self.nicks:
                                             self.nicks.add(base_nick)
-                                        self._update_nicklist()
+                                        self._schedule_nicklist_update()
                             else:
                                 # Nick not in list, add it with prefix if adding mode
                                 if is_add:
@@ -437,6 +444,27 @@ class ChannelWidget(QWidget):
     def _append_text(self, text: str, color: Optional[QColor] = None, 
                     nick_color: Optional[QColor] = None, is_mention: bool = False):
         """Append text to the message display with formatting and clickable links."""
+        # Limit the number of lines to prevent memory issues (keep last 5000 lines)
+        max_lines = 5000
+        document = self.message_display.document()
+        line_count = document.blockCount()
+        
+        if line_count > max_lines:
+            # Remove old lines (keep only the last max_lines)
+            cursor = self.message_display.textCursor()
+            cursor.movePosition(cursor.MoveOperation.Start)
+            # Move to the line we want to keep (remove first line_count - max_lines lines)
+            lines_to_remove = line_count - max_lines
+            for _ in range(lines_to_remove):
+                if not cursor.movePosition(cursor.MoveOperation.Down):
+                    break
+            # Select from start to current position and delete
+            cursor.movePosition(cursor.MoveOperation.Start, cursor.MoveMode.KeepAnchor)
+            cursor.removeSelectedText()
+            # Restore cursor position to end after deletion
+            cursor.movePosition(cursor.MoveOperation.End)
+            self.message_display.setTextCursor(cursor)
+        
         cursor = self.message_display.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
         
@@ -534,7 +562,13 @@ class ChannelWidget(QWidget):
         return QColor.fromHsv(hue, 200, 150)
     
     def _update_nicklist(self):
-        """Update the nicklist display."""
+        """Update the nicklist display (batched to prevent UI freezing)."""
+        self.nicklist_update_pending = False
+        
+        # Don't update if widget is not visible (performance optimization)
+        if not self.isVisible():
+            return
+        
         self.nicklist.clear()
         
         # Sort nicks (ops first, then voiced, then regular)
@@ -543,8 +577,23 @@ class ChannelWidget(QWidget):
             n.lstrip('@+').lower()
         ))
         
-        for nick in sorted_nicks:
-            self.nicklist.addItem(nick)
+        # Batch add items to prevent UI blocking
+        # For very large lists, add in chunks
+        chunk_size = 100
+        for i in range(0, len(sorted_nicks), chunk_size):
+            chunk = sorted_nicks[i:i + chunk_size]
+            for nick in chunk:
+                self.nicklist.addItem(nick)
+            # Process events periodically to keep UI responsive
+            if i + chunk_size < len(sorted_nicks):
+                from PyQt6.QtWidgets import QApplication
+                QApplication.processEvents()
+    
+    def _schedule_nicklist_update(self):
+        """Schedule a nicklist update (batched to avoid UI freezing)."""
+        if not self.nicklist_update_pending:
+            self.nicklist_update_pending = True
+            self.nicklist_update_timer.start(self.nicklist_update_interval)
     
     def set_topic(self, topic: str):
         """Set the channel topic."""
@@ -591,7 +640,8 @@ class ChannelWidget(QWidget):
             # New nick, just add it
             self.nicks.add(nick)
         
-        self._update_nicklist()
+        # Schedule batched update instead of immediate update
+        self._schedule_nicklist_update()
     
     def remove_nick(self, nick: str):
         """Remove a nickname from the list (removes all prefix variants)."""
